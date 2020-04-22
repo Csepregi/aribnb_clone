@@ -1,0 +1,8 @@
+GET http://localhost:3001/api/houses
+# Content-Type: application/json
+
+# {
+#   "email": "csepregigabor02@gmail.com",
+#   "password": "gabor",
+#   "passwordconfirmation": "gabor"
+# }
