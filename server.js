@@ -1,3 +1,5 @@
+const dotenv = require('dotenv')
+dotenv.config()
 const express = require('express')
 const next = require('next')
 const session = require('express-session')
@@ -6,6 +8,7 @@ const bodyParser = require('body-parser')
 const User = require('./models/user')
 const Review = require('./models/review')
 const House = require('./models/house')
+const Booking = require('./models/booking')
 const sequelize = require('./database.js')
 const passport = require('passport')
 const LocalStrategy = require('passport-local').Strategy
@@ -15,6 +18,32 @@ const dev = process.env.NODE_ENV !== 'production'
 const nextApp = next({ dev })
 const handle = nextApp.getRequestHandler()
 
+const Op = require('sequelize').Op
+
+const canBookThoseDates = async (houseId, startDate, endDate) => {
+	const results = await Booking.findAll({
+		where: {
+			houseId: houseId,
+			startDate: {
+				[Op.lte]: new Date(endDate)
+			},
+			endDate: {
+				[Op.gte]: new Date(startDate)
+			}
+		}
+	})
+	return !(results.length > 0)
+}
+
+const getDatesBetweenDates = (startDate, endDate) => {
+	let dates = []
+	while (startDate < endDate) {
+		dates = [...dates, new Date(startDate)]
+		startDate.setDate(startDate.getDate() + 1)
+	}
+	dates = [...dates, endDate]
+	return dates
+}
 
 const sessionStore = new SequelizeStore({
 	db: sequelize
@@ -23,6 +52,7 @@ const sessionStore = new SequelizeStore({
 User.sync({ alter: true })
 House.sync({ alter: true })
 Review.sync({ alter: true })
+Booking.sync({ alter: true })
 //sessionStore.sync()
 
 passport.use(new LocalStrategy({
@@ -50,8 +80,6 @@ passport.use(new LocalStrategy({
 
 	done(null, user)
 }))
-
-
 
 
 passport.serializeUser((user, done) => {
@@ -95,37 +123,7 @@ nextApp.prepare().then(() => {
 		})
 	})
 
-	server.get('/api/houses/:id', (req, res) => {
-		const { id } = req.params
-		House.findByPk(id).then(house => {
-			if (house) {
-				Review.findAndCountAll({
-					where: {
-						houseId: house.id
-					}
-				}).then(reviews => {
-					house.dataValues.reviews = reviews.rows.map(
-						review => review.dataValues
-					)
-					house.dataValues.reviewsCount = reviews.count
 
-					res.writeHead(200, {
-						'Content-Type': 'application/json'
-					})
-					res.end(JSON.stringify(house.dataValues))
-				})
-			} else {
-				res.writeHead(404, {
-					'Content-Type': 'application/json'
-				})
-				res.end(
-					JSON.stringify({
-						message: `Not found`
-					})
-				)
-			}
-		})
-	})
 
 
 	server.post('/api/auth/register', async (req, res) => {
@@ -209,6 +207,172 @@ nextApp.prepare().then(() => {
 				)
 			})
 		})(req, res, next)
+	})
+
+
+
+	// server.post('/api/stripe/session', async (req, res) => {
+	// 	const amount = req.body.amount
+
+	// 	const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+	// 	const session = await stripe.checkout.sessions.create({
+	// 		payment_method_types: ['card'],
+	// 		line_items: [
+	// 			{
+	// 				name: 'Booking house on Airbnb clone',
+	// 				amount: amount * 100,
+	// 				currency: 'usd',
+	// 				quantity: 1
+	// 			}
+	// 		],
+	// 		success_url: process.env.BASE_URL + '/bookings',
+	// 		cancel_url: process.env.BASE_URL + '/bookings'
+	// 	})
+
+	// 	res.writeHead(200, {
+	// 		'Content-Type': 'application/json'
+	// 	})
+	// 	res.end(
+	// 		JSON.stringify({
+	// 			status: 'success',
+	// 			sessionId: session.id,
+	// 			stripePublicKey: process.env.STRIPE_PUBLIC_KEY
+	// 		})
+	// 	)
+	// })
+
+	server.post('/api/houses/check', async (req, res) => {
+		const startDate = req.body.startDate
+		const endDate = req.body.endDate
+		const houseId = req.body.houseId
+
+		let message = 'free'
+		if (!(await canBookThoseDates(houseId, startDate, endDate))) {
+			message = 'busy'
+		}
+
+		res.json({
+			status: 'success',
+			message: message
+		})
+	})
+
+	server.post('/api/houses/booked', async (req, res) => {
+		const houseId = req.body.houseId
+
+		const results = await Booking.findAll({
+			where: {
+				houseId: houseId,
+				endDate: {
+					[Op.gte]: new Date()
+				}
+			}
+		})
+
+		let bookedDates = []
+
+		for (const result of results) {
+			const dates = getDatesBetweenDates(
+				new Date(result.startDate),
+				new Date(result.endDate)
+			)
+
+			bookedDates = [...bookedDates, ...dates]
+		}
+
+		//remove duplicates
+		bookedDates = [...new Set(bookedDates.map(date => date))]
+
+		res.json({
+			status: 'success',
+			message: 'ok',
+			dates: bookedDates
+		})
+	})
+
+	server.post('/api/houses/reserve', async (req, res) => {
+		if (!req.session.passport) {
+			res.writeHead(403, {
+				'Content-Type': 'application/json'
+			})
+			res.end(
+				JSON.stringify({
+					status: 'error',
+					message: 'Unauthorized'
+				})
+			)
+
+			return
+		}
+
+		if (
+			!(await canBookThoseDates(
+				req.body.houseId,
+				req.body.startDate,
+				req.body.endDate
+			))
+		) {
+			//busy
+			res.writeHead(500, {
+				'Content-Type': 'application/json'
+			})
+			res.end(
+				JSON.stringify({
+					status: 'error',
+					message: 'House is already booked'
+				})
+			)
+
+			return
+		}
+
+		const userEmail = req.session.passport.user
+		User.findOne({ where: { email: userEmail } }).then(user => {
+			Booking.create({
+				houseId: req.body.houseId,
+				userId: user.id,
+				startDate: req.body.startDate,
+				endDate: req.body.endDate
+			}).then(() => {
+				res.writeHead(200, {
+					'Content-Type': 'application/json'
+				})
+				res.end(JSON.stringify({ status: 'success', message: 'ok' }))
+			})
+		})
+	})
+
+
+	server.get('/api/houses/:id', (req, res) => {
+		const { id } = req.params
+		House.findByPk(id).then(house => {
+			if (house) {
+				Review.findAndCountAll({
+					where: {
+						houseId: house.id
+					}
+				}).then(reviews => {
+					house.dataValues.reviews = reviews.rows.map(
+						review => review.dataValues
+					)
+					house.dataValues.reviewsCount = reviews.count
+
+					res.writeHead(200, {
+						'Content-Type': 'application/json'
+					})
+					res.end(JSON.stringify(house.dataValues))
+				})
+			} else {
+				res.writeHead(404, {
+					'Content-Type': 'application/json'
+				})
+				res.end(
+					JSON.stringify({
+						message: `Not found`
+					})
+				)
+			}
+		})
 	})
 
 	server.all('*', (req, res) => {
