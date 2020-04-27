@@ -94,7 +94,12 @@ passport.deserializeUser((email, done) => {
 
 nextApp.prepare().then(() => {
 	const server = express()
-	server.use(bodyParser.json())
+	server.use(bodyParser.json({
+		// make rawbody available
+		verify: (req, res, buf) => {
+			req.rawBody = buf
+		}
+	}))
 	server.use(
 		session({
 			secret: '343ji43j4n3jn4jk3n', //enter a random string here
@@ -211,35 +216,35 @@ nextApp.prepare().then(() => {
 
 
 
-	// server.post('/api/stripe/session', async (req, res) => {
-	// 	const amount = req.body.amount
+	server.post('/api/stripe/session', async (req, res) => {
+		const amount = req.body.amount
 
-	// 	const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
-	// 	const session = await stripe.checkout.sessions.create({
-	// 		payment_method_types: ['card'],
-	// 		line_items: [
-	// 			{
-	// 				name: 'Booking house on Airbnb clone',
-	// 				amount: amount * 100,
-	// 				currency: 'usd',
-	// 				quantity: 1
-	// 			}
-	// 		],
-	// 		success_url: process.env.BASE_URL + '/bookings',
-	// 		cancel_url: process.env.BASE_URL + '/bookings'
-	// 	})
+		const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+		const session = await stripe.checkout.sessions.create({
+			payment_method_types: ['card'],
+			line_items: [
+				{
+					name: 'Booking house on Airbnb clone',
+					amount: amount * 100,
+					currency: 'usd',
+					quantity: 1
+				}
+			],
+			success_url: process.env.BASE_URL + '/bookings',
+			cancel_url: process.env.BASE_URL + '/bookings'
+		})
 
-	// 	res.writeHead(200, {
-	// 		'Content-Type': 'application/json'
-	// 	})
-	// 	res.end(
-	// 		JSON.stringify({
-	// 			status: 'success',
-	// 			sessionId: session.id,
-	// 			stripePublicKey: process.env.STRIPE_PUBLIC_KEY
-	// 		})
-	// 	)
-	// })
+		res.writeHead(200, {
+			'Content-Type': 'application/json'
+		})
+		res.end(
+			JSON.stringify({
+				status: 'success',
+				sessionId: session.id,
+				stripePublicKey: process.env.STRIPE_PUBLIC_KEY
+			})
+		)
+	})
 
 	server.post('/api/houses/check', async (req, res) => {
 		const startDate = req.body.startDate
@@ -301,10 +306,8 @@ nextApp.prepare().then(() => {
 					message: 'Unauthorized'
 				})
 			)
-
 			return
 		}
-
 		if (
 			!(await canBookThoseDates(
 				req.body.houseId,
@@ -322,7 +325,6 @@ nextApp.prepare().then(() => {
 					message: 'House is already booked'
 				})
 			)
-
 			return
 		}
 
@@ -332,7 +334,8 @@ nextApp.prepare().then(() => {
 				houseId: req.body.houseId,
 				userId: user.id,
 				startDate: req.body.startDate,
-				endDate: req.body.endDate
+				endDate: req.body.endDate,
+				sessionId: req.body.sessionId
 			}).then(() => {
 				res.writeHead(200, {
 					'Content-Type': 'application/json'
@@ -342,6 +345,82 @@ nextApp.prepare().then(() => {
 		})
 	})
 
+
+	server.get('/api/host/list', async (req, res) => {
+		if (!req.session.passport || !req.session.passport.user) {
+			res.writeHead(403, {
+				'Content-Type': 'application/json'
+			})
+			res.end(
+				JSON.stringify({
+					status: 'error',
+					message: 'Unauthorized'
+				})
+			)
+
+			return
+		}
+
+		const userEmail = req.session.passport.user
+		const user = await User.findOne({ where: { email: userEmail } })
+
+		const houses = await House.findAll({
+			where: {
+				host: user.id
+			}
+		})
+
+		res.writeHead(200, {
+			'Content-Type': 'application/json'
+		})
+		res.end(
+			JSON.stringify({
+				houses
+			})
+		)
+	})
+
+	server.get('/api/bookings/list', async (req, res) => {
+		if (!req.session.passport || !req.session.passport.user) {
+			res.writeHead(403, {
+				'Content-Type': 'application/json'
+			})
+			res.end(JSON.stringify({
+				status: 'error',
+				message: 'Unauthorized'
+			}))
+
+			return
+		}
+
+		const userEmail = req.session.passport.user
+		const user = await User.findOne({ where: { email: userEmail } })
+
+		Booking.findAndCountAll({
+			where: {
+				paid: true,
+				userId: user.id,
+				endDate: {
+					[Op.gte]: new Date()
+				}
+			},
+			order: [['startDate', 'ASC']]
+		}).then(async result => {
+			const bookings = await Promise.all(
+				result.rows.map(async booking => {
+					const data = {}
+					data.booking = booking.dataValues
+					data.house = (await House.findByPk(data.booking.houseId)).dataValues
+					return data
+				})
+			)
+
+			res.writeHead(200, {
+				'Content-Type': 'application/json'
+			})
+			res.end(JSON.stringify(bookings))
+		})
+	})
 
 	server.get('/api/houses/:id', (req, res) => {
 		const { id } = req.params
@@ -373,6 +452,65 @@ nextApp.prepare().then(() => {
 				)
 			}
 		})
+	})
+
+	server.post('/api/stripe/webhook', async (req, res) => {
+		const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+		const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET
+		const sig = req.headers['stripe-signature']
+
+		let event
+
+		try {
+			event = stripe.webhooks.constructEvent(req.rawBody, sig, endpointSecret)
+		} catch (err) {
+			res.writeHead(400, {
+				'Content-Type': 'application/json'
+			})
+			console.error(err.message)
+			res.end(
+				JSON.stringify({
+					status: 'success',
+					message: `Webhook Error: ${err.message}`
+				})
+			)
+			return
+		}
+
+		if (event.type === 'checkout.session.completed') {
+			const sessionId = event.data.object.id
+
+			try {
+				Booking.update({ paid: true }, { where: { sessionId } })
+			} catch (err) {
+				console.error(err)
+			}
+		}
+
+		res.writeHead(200, {
+			'Content-Type': 'application/json'
+		})
+		res.end(JSON.stringify({ received: true }))
+	})
+
+
+	server.post('/api/bookings/clean', (req, res) => {
+		Booking.destroy({
+			where: {
+				paid: false
+			}
+		})
+
+		res.writeHead(200, {
+			'Content-Type': 'application/json'
+		})
+
+		res.end(
+			JSON.stringify({
+				status: 'success',
+				message: 'ok'
+			})
+		)
 	})
 
 	server.all('*', (req, res) => {

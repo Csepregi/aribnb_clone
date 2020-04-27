@@ -124,48 +124,43 @@ const House = props => {
 											return
 										}
 
-										// try {
-										// 	const sessionResponse = await axios.post(
-										// 		'/api/stripe/session',
-										// 		{
-										// 			amount:
-										// 				props.house.price * numberOfNightsBetweenDates
-										// 		}
-										// 	)
-										// 	if (sessionResponse.data.status === 'error') {
-										// 		alert(sessionResponse.data.message)
-										// 		return
-										// 	}
+										try {
+											const sessionResponse = await axios.post('/api/stripe/session', {
+												amount: props.house.price * numberOfNightsBetweenDates
+											})
+											if (sessionResponse.data.status === 'error') {
+												alert(sessionResponse.data.message)
+												return
+											}
 
-										// 	const sessionId = sessionResponse.data.sessionId
-										// 	const stripePublicKey =
-										// 		sessionResponse.data.stripePublicKey
+											const sessionId = sessionResponse.data.sessionId
+											const stripePublicKey =
+												sessionResponse.data.stripePublicKey
 
-										// 	const reserveResponse = await axios.post(
-										// 		'/api/houses/reserve',
-										// 		{
-										// 			houseId: props.house.id,
-										// 			startDate,
-										// 			endDate,
-										// 			sessionId
-										// 		}
-										// 	)
-										// 	if (reserveResponse.data.status === 'error') {
-										// 		alert(reserveResponse.data.message)
-										// 		return
-										// 	}
+											const reserveResponse = await axios.post(
+												'/api/houses/reserve',
+												{
+													houseId: props.house.id,
+													startDate,
+													endDate,
+													sessionId
+												}
+											)
+											if (reserveResponse.data.status === 'error') {
+												alert(reserveResponse.data.message)
+												return
+											}
 
-										// 	const stripe = Stripe(stripePublicKey)
-										// 	const { error } = await stripe.redirectToCheckout({
-										// 		sessionId
-										// 	})
+											const stripe = Stripe(stripePublicKey)
+											const { error } = await stripe.redirectToCheckout({
+												sessionId
+											})
 
-										// 	console.log(reserveResponse.data)
-										// } catch (error) {
-										// 	console.log(error)
-										// 	return
-										// }
-
+											console.log(reserveResponse.data)
+										} catch (error) {
+											console.log(error)
+											return
+										}
 
 									}}>Reserve</button>
 								) : (
