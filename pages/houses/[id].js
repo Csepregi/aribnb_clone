@@ -156,7 +156,6 @@ const House = props => {
 												sessionId
 											})
 
-											console.log(reserveResponse.data)
 										} catch (error) {
 											console.log(error)
 											return
@@ -191,9 +190,7 @@ const House = props => {
 }
 
 House.getInitialProps = async ({ query }) => {
-	console.log(query)
 	const { id } = query
-	console.log(id)
 	const res = await fetch(`http://localhost:3000/api/houses/${id}`)
 	const house = await res.json()
 
